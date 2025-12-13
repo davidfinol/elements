@@ -441,7 +441,7 @@ match_numbers = re.compile(
 
 def check_numbers(prompts, completions, answer, **kwargs):
     """Extract and check numerical answer."""
-    question = kwargs["question"]
+    question = prompts
     responses = completions
 
     extracted_responses = [
@@ -810,7 +810,7 @@ print("="*60)
 
 # Load trained checkpoint
 trained_ckpt_path = os.path.join(
-    CKPT_DIR, "actor", str(MAX_STEPS), "model_params"
+    CKPT_DIR, "actor", str(1), "model_params"
 )
 
 abs_params = jax.tree.map(
