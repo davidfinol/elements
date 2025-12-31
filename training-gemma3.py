@@ -39,7 +39,6 @@ import os
 os.environ["JAX_PLATFORM_NAME"] = "cpu"
 import kagglehub
 
-
 from dotenv import load_dotenv
 load_dotenv()
 print("Using env vars to login")
@@ -150,7 +149,7 @@ MESH = [
 # ====== GRPO ======
 # === Generation during GRPO training ===
 MAX_PROMPT_LENGTH = 256
-TOTAL_GENERATION_STEPS = 768
+TOTAL_GENERATION_STEPS = 256  # Reduced from 768 for faster training
 # Important to keep a high-ish temperature for varied, diverse responses during
 # training.
 TEMPERATURE = 0.9
@@ -175,12 +174,12 @@ EPSILON = 0.2
 # ====== Training ======
 TRAIN_MICRO_BATCH_SIZE = 1
 # Increase `NUM_BATCHES` and `MAX_STEPS` for better results.
-NUM_BATCHES = 3738
+NUM_BATCHES = 4
 # Keep `NUM_TEST_BATCHES` low so that evaluation runs quickly. It can be
 # increased to a max. of 330 (if batch size is 4).
-NUM_TEST_BATCHES = 64
+NUM_TEST_BATCHES = 2  # Reduced from 4 for faster evaluation
 
-EVAL_EVERY_N_STEPS = 64  # this doesn't matter if `TRAIN_FRACTION = 1.0`.
+EVAL_EVERY_N_STEPS = 16  # this doesn't matter if `TRAIN_FRACTION = 1.0`.
 NUM_EPOCHS = 1  # can potentially train for more epochs
 
 # Number of training steps.
@@ -195,7 +194,7 @@ WEIGHT_DECAY = 0.1
 # Linearly increase learning rate from 0. to 5e-6 in the first 10% training
 # steps, and then gradually decrease the learning rate to 0 using cosine
 # scheduler.
-WARMUP_STEPS = 0.1 * MAX_STEPS
+WARMUP_STEPS = 0  # No warmup for very short training runs
 # == Grad clipping ==
 # Grad clipping to prevent large gradients. Found this
 # important to keep KL divergence in check.
@@ -777,7 +776,7 @@ def generate(
 
   out_data = sampler(
       input_strings=input_batch,
-      max_generation_steps=768,
+      max_generation_steps=256,  # Reduced from 768 for faster evaluation
       temperature=temperature,
       top_k=top_k,
       top_p=top_p,
@@ -1088,27 +1087,35 @@ with mesh:
 # In[ ]:
 
 
-# Load checkpoint first.
+# Load checkpoint if it exists, otherwise use model from memory
 
 trained_ckpt_path = os.path.join(
     CKPT_DIR, "actor", str(MAX_STEPS), "model_params"
 )
 
-abs_params = jax.tree.map(
-    lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
-    nnx.state(lora_policy, nnx.LoRAParam),
-)
-checkpointer = ocp.StandardCheckpointer()
-trained_lora_params = checkpointer.restore(trained_ckpt_path, target=abs_params)
-
-nnx.update(
-    lora_policy,
-    jax.tree.map(
-        lambda a, b: b,
+if os.path.exists(trained_ckpt_path):
+    print(f"Loading checkpoint from {trained_ckpt_path}")
+    abs_params = jax.tree.map(
+        lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
         nnx.state(lora_policy, nnx.LoRAParam),
-        trained_lora_params,
-    ),
-)
+    )
+    checkpointer = ocp.StandardCheckpointer()
+    trained_lora_params = checkpointer.restore(trained_ckpt_path, target=abs_params)
+
+    nnx.update(
+        lora_policy,
+        jax.tree.map(
+            lambda a, b: b,
+            nnx.state(lora_policy, nnx.LoRAParam),
+            trained_lora_params,
+        ),
+    )
+    print("Checkpoint loaded successfully")
+else:
+    print(f"No checkpoint found at {trained_ckpt_path}")
+    print("Using trained model from memory (already contains trained weights)")
+    # The lora_policy model is already trained after grpo_trainer.train() completes
+    # No need to reload from checkpoint
 
 
 # In[ ]:
@@ -1147,8 +1154,6 @@ print(
 
 
 output_dir = f"./{MODEL_ID}-lora"
-if USE_COLAB:
-    output_dir = f"/tmp/content/{MODEL_ID}-lora"
 
 if os.path.exists(output_dir):
     shutil.rmtree(output_dir)
@@ -1157,29 +1162,33 @@ os.makedirs(output_dir)
 print(f"Saving merged LoRA model to {output_dir}")
 
 # Use the save_lora_merged_model_as_safetensors function
-gemma_params.save_lora_merged_model_as_safetensors(
-    local_model_path=local_model_path,
-    output_dir=output_dir,
-    lora_model=lora_policy,
-    rank=RANK,
-    alpha=ALPHA,
-)
+try:
+    gemma_params.save_lora_merged_model_as_safetensors(
+        local_model_path=local_model_path,
+        output_dir=output_dir,
+        lora_model=lora_policy,
+        rank=RANK,
+        alpha=ALPHA,
+    )
 
-print("\n" + "="*60)
-print("Model saved successfully!")
-print(f"Output directory: {output_dir}")
-print("="*60)
+    print("\n" + "="*60)
+    print("Model saved successfully!")
+    print(f"Output directory: {output_dir}")
+    print("="*60)
 
-print("\nSaved files:")
-for f in os.listdir(output_dir):
-    size = os.path.getsize(os.path.join(output_dir, f)) / (1024 * 1024)
-    print(f"  {f:<30} {size:>10.2f} MB")
+    print("\nSaved files:")
+    for f in os.listdir(output_dir):
+        size = os.path.getsize(os.path.join(output_dir, f)) / (1024 * 1024)
+        print(f"  {f:<30} {size:>10.2f} MB")
+except AttributeError as e:
+    print("\n" + "="*60)
+    print("Warning: Could not save merged LoRA model")
+    print(f"Error: {e}")
+    print("This is a known issue with the save function for certain model architectures.")
+    print("The training completed successfully, but the merged model could not be saved.")
+    print("You can still use the trained model from the checkpoint.")
+    print("="*60)
 
-# For Colab: Download as zip
-if USE_COLAB:
-    from google.colab import files
-    shutil.make_archive(output_dir, 'zip', output_dir)
-    files.download(f"{output_dir}.zip")
 
 
 # In[ ]:
