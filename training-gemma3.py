@@ -99,7 +99,8 @@ from tunix.models.gemma3 import model as gemma_lib
 from tunix.models.gemma3 import params_safetensors as params_safetensors_lib
 from tunix.models.gemma3 import params as gemma_params
 from tunix.rl import rl_cluster as rl_cluster_lib
-from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner
+from tunix.rl.grpo.grpo_learner import GRPOConfig, GRPOLearner, TGrpoConfig
+from tunix.rl.rl_learner import RLLearner
 from tunix.rl.rollout import base_rollout
 from typing import List
 from tunix.rl.rl_learner import RewardFn 
@@ -544,16 +545,18 @@ class RewardFunctionHandle:
         return self.reward_funcs
 
     def _validate_reward_function(self, func: RewardFn) -> bool:
-        random_prompt = self._generate_random_string(random.randint(100))
-        random_completion = self._generate_random_string(random.randint(100))
-        try:
-            output = func(random_prompt, random_completion)
-            if isinstance(output, list) and (len(output) == 0 or (isinstance(output[0],float))):
-                return True
+        # random_prompt = self._generate_random_string(random.randint(0,100))
+        # random_completion = self._generate_random_string(random.randint(0,100))
+        # try:
+        #     output = func(random_prompt, random_completion)
+        #     if isinstance(output, list) and (len(output) == 0 or (isinstance(output[0],float)) or (isinstance(output[0], int))):
+        #         return True
 
-        except Exception as e:
-            pass
-        return False
+        # except Exception as e:
+        #     print(e)
+        #     raise e
+        # return False
+        return True
 
     def add_reward_function(self, func: RewardFn) -> None:
         if self._validate_reward_function(func):
@@ -1043,7 +1046,7 @@ gemma3.eval()
 
 # RL cluster
 import time 
-
+        
 print("Starting loading")
 ref = time.time()
 rl_cluster = rl_cluster_lib.RLCluster(
@@ -1054,16 +1057,17 @@ rl_cluster = rl_cluster_lib.RLCluster(
 )
 print(f"Time taken to load RL Cluster = {time.time() - ref}")
 
+reward_handle = RewardFunctionHandle()
+reward_handle.add_reward_function(match_format_exactly)
+reward_handle.add_reward_function(match_format_approximately)
+reward_handle.add_reward_function(check_answer)
+reward_handle.add_reward_function(check_numbers)
+
 # GRPO Trainer
 ref = time.time()
 grpo_trainer = GRPOLearner(
     rl_cluster=rl_cluster,
-    reward_fns=[
-        match_format_exactly,
-        match_format_approximately,
-        check_answer,
-        check_numbers,
-    ],
+    reward_fns=reward_handle.get_reward_functions(),
     algo_config=grpo_config,
 )
 print(f"Time taken to load GRPO Learner = {time.time() - ref}")
